@@ -16,50 +16,62 @@ import sys
 from loki.RingData.DiffCorr import DiffCorr
 
 
-parser = argparse.ArgumentParser(description='Compute difference correlation by pairing single intensity correlations.')
+parser = argparse.ArgumentParser(description='1) Compute eigenimage (principal components) by run from polar intensities\n\
+2) Remove {0, 1,... num_pca} eigenimages from polar intensities up to a max number of eigenimages\n\
+3) Compute difference correlation after removing eigenimages.'
+,formatter_class=argparse.RawTextHelpFormatter)
 parser.add_argument('-r','--run', type=int,
                    help='run number')
+########### update this during the experiment as the types of samples we measure change
 parser.add_argument('-t','--samp_type', type=int,
-                   help='type of data/n \
-# Sample IDs\n\
-# -1: Silver Behenate smaller angle\n\
-# -2: Silver Behenate wider angle\n\
-# 0: GDP buffer\n\
-# 1: ALF BUffer\n\
-# 2: GDP protein\n\
-# 3: ALF protein\n\
-# 4: Water \n\
-# 5: Helium\n\
-# 6: 3-to-1 Recovered GDP')
-
+                   help='type of data\n \
+# Sample IDs\n \
+# -1: Nanoparticles small angle\n\
+# -2: Nanoparticles wider angle\n\
+# 0: Ga.GDP buffer\n\
+# 1: Ga.Ric8 buffer\n\
+# 2: Ga.GDP protein\n\
+# 3: Ga.Ric8 protein\n\
+# 4: Ga.GDP+AlF t= few ms\n\
+# 5: Ga.GDP+AlF t= 100 ms\n\
+# 6: Ga.Ric8+GTP t= few ms\n\
+# 7: Ga.Ric8+GTP t= 100 ms\n\
+# 8: Water \n\
+# 9: Helium')
 parser.add_argument('-q','--qmin', type=int,
-                   help='index of minimum q used for pairing or the only q used for pairing')
+                   help='index of minimum q to denoise and compute correlations')
 
 parser.add_argument('-u','--qmax', type=int, default=None,
-                   help='index of max q used for pairing or None')
+                   help='index of max q to denoise and compute correlations, or None')
 
 parser.add_argument('-o','--out_dir', type=str,required=True,
                    help='output dir to save in, overwrites the sample type dir')
 
-parser.add_argument('-d','--data_dir', type=str, default = '/reg/d/psdm/cxi/cxilp6715/results/combined_tables/finer_q',
+parser.add_argument('-d','--data_dir', type=str, required=True,
                    help='where to look for the polar data')
 
 parser.add_argument('-p','--num_pca', type=int, default=None,
-                   help='num_pca+1 is the max number of pca components to subtract')
+                   help='num_pca+1 is the max number of eigenimages/pca components to subtract')
 
 
 
-
+########### update this during the experiment as the types of samples we measure change
 def sample_type(x):
-    return {-1:'AgB_sml',
-    -2:'AgB_wid',
-     0:'GDP_buf',
-     1:'ALF_buf',
-     2:'GDP_pro',
-     3:'ALF_pro',
-     4:'h2o',
-     5:'he',
-     6:'3to1_rec_GDP_pro'}[x]
+    return {-1:'NP_sml',
+    -2:'NP_wid',
+     0:'GaGDP_buf',
+     1:'GaRic8_buf',
+     2:'GaGDP_pro',
+     3:'GaRic8_pro',
+     4:'GaGDP_AlF_short',
+     5:'GaGDP_AlF_long',
+     6:'GaRic8_GTP_short',
+     7:'GaRic8_GTP_long',
+     8:'h2o',
+     9:'he'}[x]
+###############change this if the total number of sample types measured changes
+samp_type_range= range(-1,10)
+
 
 def normalize_shot(ss, this_mask):
     if ss.dtype != 'float64':
@@ -88,10 +100,9 @@ def reshape_unmasked_values_to_shots(shots,mask):
 args = parser.parse_args()
 
 
-
 run_num = args.run
 
-if args.samp_type not in [-1,-2,0,1,2,3,4,5,6]:
+if args.samp_type not in samp_type_range:
     print("Error!!!! type of sample does not exist")
     sys.exit()
 else:
@@ -129,8 +140,10 @@ f_out = h5py.File(os.path.join(save_dir, out_file),'a')
 if 'polar_mask_binned' in f.keys():
     mask = np.array(f['polar_mask_binned'].value==f['polar_mask_binned'].value.max(), dtype = int)
 else:
-    mask = np.load('/reg/d/psdm/cxi/cxilp6715/results/shared_files/binned_pmask_basic.npy')
-
+    #every run should have it's own binned polar mask saved, if not, something is run, exit
+    print("this run has no binned mask. Something is wrong. Quit!")
+    print(os.path.join(data_dir, run_file))
+    sys.exit()
 
 PI = f['polar_imgs']
 shot_tags = np.arange(0,PI.shape[0])

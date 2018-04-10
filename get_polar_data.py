@@ -37,7 +37,8 @@ def norm_data(data):
 
 
 parser = argparse.ArgumentParser(description='Data grab: interpolate data into polar intensities\n \
-    Hit detection using radial profile and water peak')
+    Hit detection using radial profile and water peak'
+    ,formatter_class=argparse.RawTextHelpFormatter)
 parser.add_argument('-r', '--run', type=int, required=True, help='run number to process')
 parser.add_argument('-m', '--maxcount', type=int, default=0, help='max shots to process')
 parser.add_argument('-s', '--start', type=int, default=0, help='first event to process')
@@ -49,7 +50,7 @@ parser.add_argument('-rmin', '--interp_rmin', type=int, default=100, help='minim
 parser.add_argument('-d', '--out_dir', type=str,default ='/reg/d/psdm/cxi/cxilp6715/scratch/polar_data',
 help='dir in which to store the polar data output')
 parser.add_argument('-mf', '--mask_file', type=str,
-    default ='/reg/d/psdm/cxi/cxilp6715/results/shared_files/mask_rough4.npy',
+    required=True,
     help=".npy file containing mask for the polar data")
 
 
@@ -150,7 +151,10 @@ ds = psana.MPIDataSource(ds_str)
 events = ds.events()
 
 # open the detector obj
+# change cspad alias!
+##############################################
 cspad = psana.Detector('CxiDs1.0:Cspad.0')
+##############################################
 
 # make some output dir
 outdir = args.out_dir
