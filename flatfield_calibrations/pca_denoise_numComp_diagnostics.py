@@ -14,75 +14,61 @@ import numpy as np
 import sys
 
 from loki.RingData.DiffCorr import DiffCorr
+from cali_utils import *
 
 
-parser = argparse.ArgumentParser(description='1) Compute eigenimage (principal components) by run from polar intensities\n\
-2) Remove {0, 1,... num_pca} eigenimages from polar intensities up to a max number of eigenimages\n\
-3) Compute difference correlation after removing eigenimages.'
-,formatter_class=argparse.RawTextHelpFormatter)
+parser = argparse.ArgumentParser(description='Compute difference correlation by pairing single intensity correlations.')
 parser.add_argument('-r','--run', type=int,
                    help='run number')
-########### update this during the experiment as the types of samples we measure change
 parser.add_argument('-t','--samp_type', type=int,
-                   help='type of data\n \
-# Sample IDs\n \
-# -1: Nanoparticles small angle\n\
-# -2: Nanoparticles wider angle\n\
-# 0: Ga.GDP buffer\n\
-# 1: Ga.Ric8 buffer\n\
-# 2: Ga.GDP protein\n\
-# 3: Ga.Ric8 protein\n\
-# 4: Ga.GDP+AlF t= few ms\n\
-# 5: Ga.GDP+AlF t= 100 ms\n\
-# 6: Ga.Ric8+GTP t= few ms\n\
-# 7: Ga.Ric8+GTP t= 100 ms\n\
-# 8: Water \n\
-# 9: Helium')
+                   help='type of data/n \
+# Sample IDs\n\
+# -1: Silver Behenate smaller angle\n\
+# -2: Silver Behenate wider angle\n\
+# 0: GDP buffer\n\
+# 1: ALF BUffer\n\
+# 2: GDP protein\n\
+# 3: ALF protein\n\
+# 4: Water \n\
+# 5: Helium\n\
+# 6: 3-to-1 Recovered GDP')
+
 parser.add_argument('-q','--qmin', type=int,
-                   help='index of minimum q to denoise and compute correlations')
+                   help='index of minimum q used for pairing or the only q used for pairing')
 
 parser.add_argument('-u','--qmax', type=int, default=None,
-                   help='index of max q to denoise and compute correlations, or None')
+                   help='index of max q used for pairing or None')
 
 parser.add_argument('-o','--out_dir', type=str,required=True,
                    help='output dir to save in, overwrites the sample type dir')
 
-parser.add_argument('-d','--data_dir', type=str, required=True,
+parser.add_argument('-d','--data_dir', type=str, default = '/reg/d/psdm/cxi/cxilp6715/results/combined_tables/finer_q',
                    help='where to look for the polar data')
 
 parser.add_argument('-p','--num_pca', type=int, default=None,
-                   help='num_pca+1 is the max number of eigenimages/pca components to subtract')
+                   help='num_pca+1 is the max number of pca components to subtract')
+
+parser.add_argument('-s','--save', type=int, default=0,
+                   help='if >0, save all the dif cors for the num_pca needed')
+
+
+parser.add_argument('-f','--n_files', type=int, default=1,
+                   help='number of groups/files to split the data into. this splits larger runs for the PCA')
 
 
 
-########### update this during the experiment as the types of samples we measure change
 def sample_type(x):
-    return {-1:'NP_sml',
-    -2:'NP_wid',
-     0:'GaGDP_buf',
-     1:'GaRic8_buf',
-     2:'GaGDP_pro',
-     3:'GaRic8_pro',
-     4:'GaGDP_AlF_short',
-     5:'GaGDP_AlF_long',
-     6:'GaRic8_GTP_short',
-     7:'GaRic8_GTP_long',
-     8:'h2o',
-     9:'he'}[x]
-###############change this if the total number of sample types measured changes
-samp_type_range= range(-1,10)
+    return {-1:'AgB_sml',
+    -2:'AgB_wid',
+     0:'GDP_buf',
+     1:'ALF_buf',
+     2:'GDP_pro',
+     3:'ALF_pro',
+     4:'h2o',
+     5:'he',
+     6:'3to1_rec_GDP_pro'}[x]
 
 
-def normalize_shot(ss, this_mask):
-    if ss.dtype != 'float64':
-        # shots need to be float64 or more. 
-        # float32 resulted in quite a bit of numerical error 
-        ss = ss.astype(np.float64)
-    
-    ss *=this_mask
-    mean_ss = ss.sum(-1)/this_mask.sum(-1) 
-    ss = ss-mean_ss[:,None]
-    return np.nan_to_num(ss*this_mask)
 
 def reshape_unmasked_values_to_shots(shots,mask):
     # this takes vectors of unmasked values, and reshaped this into their masked forms
@@ -98,11 +84,14 @@ def reshape_unmasked_values_to_shots(shots,mask):
 
 
 args = parser.parse_args()
+save_difcor = bool(args.save>0)
+
+outlier_threshold = 2 # sigma from median is conidered an outlier, and filtered out
 
 
 run_num = args.run
 
-if args.samp_type not in samp_type_range:
+if args.samp_type not in [-1,-2,0,1,2,3,4,5,6]:
     print("Error!!!! type of sample does not exist")
     sys.exit()
 else:
@@ -134,19 +123,27 @@ run_file = "run%d.tbl"%run_num
 f = h5py.File(os.path.join(data_dir, run_file), 'r')
 
 # output file to save data
-out_file = run_file.replace('.tbl','_PCA-denoise.h5')
-f_out = h5py.File(os.path.join(save_dir, out_file),'a')
+out_file = [run_file.replace('.tbl','_PCA-denoise_%d.h5'%ii) for ii in range(args.n_files)]
+    
+
 
 if 'polar_mask_binned' in f.keys():
     mask = np.array(f['polar_mask_binned'].value==f['polar_mask_binned'].value.max(), dtype = int)
 else:
-    #every run should have it's own binned polar mask saved, if not, something is run, exit
-    print("this run has no binned mask. Something is wrong. Quit!")
-    print(os.path.join(data_dir, run_file))
+    print("there is no mask stored with the shots")
     sys.exit()
+    # mask = np.load('/reg/d/psdm/cxi/cxilp6715/results/shared_files/binned_pmask_basic.npy')
+
 
 PI = f['polar_imgs']
-shot_tags = np.arange(0,PI.shape[0])
+# filter by photon energy. If the photon energy of the shot if not within 100 EV of the average, do not use
+photon_energy=np.nan_to_num(f['ebeam']['photon_energy'].value)
+mean_E=photon_energy.mean()
+E_sigma=100.
+shot_tage_to_keep=np.where( (photon_energy> (mean_E-E_sigma))\
+    +(photon_energy< (mean_E-E_sigma)) )[0]
+
+print('Num of shots to be used: %d'%(shot_tage_to_keep.size))
 
 # figure which qs are used for pairing
 qmin = args.qmin
@@ -159,7 +156,8 @@ else:
 
 # this script on does the clustering only
 
-# normalize all the shots at each q index
+
+
 # normalize all the shots at each q index
 
 for qidx in qcluster_inds:
@@ -168,10 +166,11 @@ for qidx in qcluster_inds:
     shots=PI[:,qidx,:][shot_tage_to_keep,None,:]
     this_mask = mask[qidx][None,:]
     print('normaling shots...')
-    all_norm_shots = np.zeros_like(shots)
-    for idx,ss in enumerate(shots):
-        all_norm_shots[idx]=normalize_shot(ss,this_mask)
-    # do we want to normalize by the entire range of intensity?
+    # all_norm_shots = np.zeros_like(shots)
+    # for idx,ss in enumerate(shots):
+    #     all_norm_shots[idx]=normalize_shot(ss,this_mask)
+    # # do we want to normalize by the entire range of intensity?
+    all_norm_shots = norm_all_shots(shots.astype(np.float64),this_mask, outlier_threshold)
     # split data usig args.n_files
     split_size = int(all_norm_shots.shape[0]/args.n_files)
     for file_ind in range(args.n_files):
@@ -181,7 +180,7 @@ for qidx in qcluster_inds:
             del all_norm_shots
         else:
             norm_shots=all_norm_shots[file_ind*split_size:(file_ind+1)*split_size]
-            f_out = h5py.File(os.path.join(save_dir, out_file[file_ind]),'a')
+        f_out = h5py.File(os.path.join(save_dir, out_file[file_ind]),'a')
 
         # divide into Train and test
 
@@ -292,29 +291,37 @@ for qidx in qcluster_inds:
 
                     
                     dc=DiffCorr(denoise_Train,qvalues,0,pre_dif=False)
-                    Train_difcor= (dc.autocorr()).mean(0)
+                    difcor= dc.autocorr()
+                    f_out.create_dataset('q%d/pca%d/train_difcor'%(qidx,nn)
+                    ,data=difcor.mean(0))
+                    f_out.create_dataset('q%d/pca%d/train_difcor_err'%(qidx,nn)
+                    ,data=difcor.std(0)/np.sqrt(difcor.shape[0]))
+                    
 
                     dc=DiffCorr(denoise_Test,qvalues,0,pre_dif=False)
-                    Test_difcor= (dc.autocorr()).mean(0)
-
-
+                    difcor= dc.autocorr()
                     f_out.create_dataset('q%d/pca%d/test_difcor'%(qidx,nn)
-                        ,data=Test_difcor)
-                    f_out.create_dataset('q%d/pca%d/train_difcor'%(qidx,nn)
-                        ,data=Train_difcor)
+                        ,data=difcor.mean(0))
+                    f_out.create_dataset('q%d/pca%d/test_difcor_err'%(qidx,nn)
+                    ,data=difcor.std(0)/np.sqrt(difcor.shape[0]))
+
             
                 else:
                     print('not doing denoising, just computing baseline')
 
                     dc=DiffCorr(norm_shots[cutoff:],qvalues,0,pre_dif=False)
-                    difcor= (dc.autocorr()).mean(0)
+                    difcor= dc.autocorr()
                     f_out.create_dataset('q%d/pca%d/train_difcor'%(qidx,nn)
-                    ,data=difcor)
+                    ,data=difcor.mean(0))
+                    f_out.create_dataset('q%d/pca%d/train_difcor_err'%(qidx,nn)
+                    ,data=difcor.std(0)/np.sqrt(difcor.shape[0]))
                     
                     dc=DiffCorr(norm_shots[:cutoff],qvalues,0,pre_dif=False)
-                    difcor= (dc.autocorr()).mean(0)
+                    difcor= dc.autocorr()
                     f_out.create_dataset('q%d/pca%d/test_difcor'%(qidx,nn)
-                        ,data=difcor)
+                        ,data=difcor.mean(0))
+                    f_out.create_dataset('q%d/pca%d/test_difcor_err'%(qidx,nn)
+                    ,data=difcor.std(0)/np.sqrt(difcor.shape[0]))
             
             if 'num_shots' not in f_out[q_group].keys():        
                 f_out.create_dataset('q%d/num_shots'%qidx, data=norm_shots.shape[0])

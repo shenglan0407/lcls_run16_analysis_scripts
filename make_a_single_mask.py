@@ -6,11 +6,13 @@ import scipy
 import os
 import argparse
 
+from scipy.ndimage.morphology import binary_dilation
 
-def get_imgs(evets):
+
+def get_imgs(evets, max_evt_count=2000):
     imgs=[]
     for nevent,evt in enumerate(events):
-        if nevent>=1000: 
+        if nevent>=max_evt_count: 
             break
         try:
             img = det.image(evt)
@@ -42,7 +44,7 @@ if os.path.isfile(save_name):
 # make mask for this run 
 #################################################
 # change experiment name to cxilr67##
-ds_str = 'exp=cxilp6715:run=%d:smd' % run
+ds_str = 'exp=cxilr6716:run=%d:smd' % run
 #################################################
 try:
     ds = MPIDataSource(ds_str)
@@ -51,20 +53,20 @@ except RuntimeError:
     
 print('making masks for run %d'%run)
 print('making detector mask...')
-det = Detector('CxiDs1.0:Cspad.0')
+det = Detector('CxiDs2.0:Cspad.0')
 det_mask = det.mask(run,calib=True,status=True,edges=True,central=True,unbond=True,unbondnbrs=True)
 det_mask = det.image(run,det_mask).astype(bool)
 
 events = ds.events()
 # now get the negative pixel mask from gathering a few hundred images
 print('making negative pixel mask...')
-imgs=get_imgs(events)
+imgs=get_imgs(events, max_evt_count=1000)
 if imgs is None:
     print("run %d does not exit. Did not make mask!"%run)
     sys.exit()
 im = np.median(imgs,0)
 negative_pixel_mask=im>0
-negative_pixel_mask = ~(scipy.ndimage.morphology.binary_dilation(~negative_pixel_mask, iterations=1) )
+negative_pixel_mask = ~(binary_dilation(~negative_pixel_mask, iterations=1) )
 
 print('saving full mask in %s'%save_name)
 mask= det_mask*negative_pixel_mask
